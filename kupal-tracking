@@ -3,41 +3,42 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
 -- Local Player and Camera
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local originalCameraType = camera.CameraType
-local originalCameraSubject = camera.CameraSubject -- Store the original subject
+local originalCameraSubject = camera.CameraSubject
 
 -- Configuration
-local CAMERA_OFFSET = CFrame.new(0, 2, 7) -- Offset from head: (X, Y, Z) - Y is up, Z is distance behind
-local INDICATOR_CIRCLE_ID = "rbxassetid://5035439195" -- A simple white circle decal
-local INDICATOR_SIZE = UDim2.new(0, 60, 0, 60) -- Pixel size of the circle
-local INDICATOR_COLOR = Color3.fromRGB(255, 0, 0) -- Red
-local MENU_TOGGLE_KEY = Enum.KeyCode.RightControl -- Key to toggle the menu visibility
+local CAMERA_OFFSET = CFrame.new(0, 2, 10) -- Offset from head: (X, Y, Z) - Y is up, Z is distance behind
+local MENU_TOGGLE_KEY = Enum.KeyCode.RightControl
+local MAX_PLAYERS_TO_CYCLE_LIMIT = 5 -- Absolute maximum for the slider
 
 -- State
-local isTrackingActive = false
-local currentTargetPlayer = nil
-local indicatorBillboardGui = nil
-local menuVisible = true -- Menu starts visible
+local isCyclingActive = false
+local selectedTargets = {} -- Table of Player objects
+local currentCycleIndex = 1
+local maxSelectableTargets = 1 -- Controlled by slider
+local menuVisible = true
 
 -- GUI Elements
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "KupalTrackerGui"
-screenGui.ResetOnSpawn = false -- Keep GUI when player respawns
-screenGui.DisplayOrder = 1000 -- Ensure it's on top of most other GUIs
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 1000
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 250, 0, 350)
+mainFrame.Size = UDim2.new(0, 280, 0, 450) -- Increased height
 mainFrame.Position = UDim2.new(0.02, 0, 0.02, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 mainFrame.BorderSizePixel = 2
 mainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
-mainFrame.Draggable = true -- Allow dragging
+mainFrame.Draggable = true
 mainFrame.Active = true
+mainFrame.ClipsDescendants = true
 mainFrame.Parent = screenGui
 
 local titleLabel = Instance.new("TextLabel")
@@ -45,30 +46,84 @@ titleLabel.Name = "TitleLabel"
 titleLabel.Size = UDim2.new(1, 0, 0, 30)
 titleLabel.Position = UDim2.new(0, 0, 0, 0)
 titleLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-titleLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
-titleLabel.Text = "Kupal Tracker"
+titleLabel.TextColor3 = Color3.fromRGB(255, 0, 0) -- Red text
+titleLabel.Text = "Kupal Tracking made by consolation â™¥ï¸"
 titleLabel.Font = Enum.Font.SourceSansBold
-titleLabel.TextSize = 18
+titleLabel.TextSize = 16
 titleLabel.Parent = mainFrame
 
-local toggleTrackingButton = Instance.new("TextButton")
-toggleTrackingButton.Name = "ToggleTrackingButton"
-toggleTrackingButton.Size = UDim2.new(1, -20, 0, 30)
-toggleTrackingButton.Position = UDim2.new(0, 10, 0, 40)
-toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-toggleTrackingButton.TextColor3 = Color3.fromRGB(200, 200, 200)
-toggleTrackingButton.Text = "Tracking: OFF"
-toggleTrackingButton.Font = Enum.Font.SourceSans
-toggleTrackingButton.TextSize = 16
-toggleTrackingButton.Parent = mainFrame
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "CloseButton"
+closeButton.Size = UDim2.new(0, 25, 0, 25)
+closeButton.Position = UDim2.new(1, -28, 0, 3)
+closeButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+closeButton.BorderColor3 = Color3.fromRGB(80,80,80)
+closeButton.TextColor3 = Color3.fromRGB(220, 220, 220)
+closeButton.Text = "X"
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.TextSize = 16
+closeButton.Parent = mainFrame
+
+local toggleCycleButton = Instance.new("TextButton")
+toggleCycleButton.Name = "ToggleCycleButton"
+toggleCycleButton.Size = UDim2.new(1, -20, 0, 30)
+toggleCycleButton.Position = UDim2.new(0, 10, 0, 40)
+toggleCycleButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+toggleCycleButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+toggleCycleButton.Text = "Cycle Targets: OFF"
+toggleCycleButton.Font = Enum.Font.SourceSans
+toggleCycleButton.TextSize = 16
+toggleCycleButton.Parent = mainFrame
+
+local nextTargetButton = Instance.new("TextButton")
+nextTargetButton.Name = "NextTargetButton"
+nextTargetButton.Size = UDim2.new(1, -20, 0, 30)
+nextTargetButton.Position = UDim2.new(0, 10, 0, 80)
+nextTargetButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+nextTargetButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+nextTargetButton.Text = "Next Target"
+nextTargetButton.Font = Enum.Font.SourceSans
+nextTargetButton.TextSize = 16
+nextTargetButton.Parent = mainFrame
+
+local maxTargetsLabel = Instance.new("TextLabel")
+maxTargetsLabel.Name = "MaxTargetsLabel"
+maxTargetsLabel.Size = UDim2.new(1, -20, 0, 20)
+maxTargetsLabel.Position = UDim2.new(0, 10, 0, 120)
+maxTargetsLabel.BackgroundTransparency = 1
+maxTargetsLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+maxTargetsLabel.Text = "Max Targets to Cycle: 1"
+maxTargetsLabel.Font = Enum.Font.SourceSans
+maxTargetsLabel.TextSize = 14
+maxTargetsLabel.TextXAlignment = Enum.TextXAlignment.Left
+maxTargetsLabel.Parent = mainFrame
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Size = UDim2.new(1, -20, 0, 10)
+sliderTrack.Position = UDim2.new(0, 10, 0, 145)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = mainFrame
+
+local sliderThumb = Instance.new("TextButton") -- Using TextButton for easier click detection
+sliderThumb.Name = "SliderThumb"
+sliderThumb.Size = UDim2.new(0, 20, 0, 20) -- Thumb slightly larger than track height
+sliderThumb.Position = UDim2.new(0, 0, 0.5, -10) -- Centered on track Y
+sliderThumb.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+sliderThumb.BorderColor3 = Color3.fromRGB(150,150,255)
+sliderThumb.BorderSizePixel = 1
+sliderThumb.AutoButtonColor = false
+sliderThumb.Text = ""
+sliderThumb.Parent = sliderTrack
 
 local playerListLabel = Instance.new("TextLabel")
 playerListLabel.Name = "PlayerListLabel"
 playerListLabel.Size = UDim2.new(1, -20, 0, 20)
-playerListLabel.Position = UDim2.new(0, 10, 0, 80)
+playerListLabel.Position = UDim2.new(0, 10, 0, 175) -- Adjusted Y
 playerListLabel.BackgroundTransparency = 1
 playerListLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-playerListLabel.Text = "Select Player to Track:"
+playerListLabel.Text = "Select Players (Max " .. maxSelectableTargets .. "):"
 playerListLabel.Font = Enum.Font.SourceSans
 playerListLabel.TextSize = 14
 playerListLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -76,12 +131,12 @@ playerListLabel.Parent = mainFrame
 
 local playerListFrame = Instance.new("ScrollingFrame")
 playerListFrame.Name = "PlayerListFrame"
-playerListFrame.Size = UDim2.new(1, -20, 1, -140) -- Adjust height based on other elements
-playerListFrame.Position = UDim2.new(0, 10, 0, 105)
+playerListFrame.Size = UDim2.new(1, -20, 0, mainFrame.Size.Y.Offset - 205 - 25) -- Adjusted Y and height
+playerListFrame.Position = UDim2.new(0, 10, 0, 200) -- Adjusted Y
 playerListFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 playerListFrame.BorderSizePixel = 1
 playerListFrame.BorderColor3 = Color3.fromRGB(60, 60, 60)
-playerListFrame.CanvasSize = UDim2.new(0,0,0,0) -- Will be updated by UIListLayout
+playerListFrame.CanvasSize = UDim2.new(0,0,0,0)
 playerListFrame.ScrollBarThickness = 6
 playerListFrame.Parent = mainFrame
 
@@ -93,7 +148,7 @@ uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 local menuInfoLabel = Instance.new("TextLabel")
 menuInfoLabel.Name = "MenuInfoLabel"
 menuInfoLabel.Size = UDim2.new(1, 0, 0, 20)
-menuInfoLabel.Position = UDim2.new(0,0,1,-20) -- At the bottom of mainFrame
+menuInfoLabel.Position = UDim2.new(0,0,1,-20)
 menuInfoLabel.BackgroundTransparency = 1
 menuInfoLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 menuInfoLabel.Text = "Press RightControl to toggle menu"
@@ -101,40 +156,80 @@ menuInfoLabel.Font = Enum.Font.SourceSansItalic
 menuInfoLabel.TextSize = 12
 menuInfoLabel.Parent = mainFrame
 
+-- Slider Logic
+local isDraggingSlider = false
+
+local function updateSliderThumbPosition()
+	local trackWidth = sliderTrack.AbsoluteSize.X - sliderThumb.AbsoluteSize.X
+	local percent = (maxSelectableTargets - 1) / math.max(1, MAX_PLAYERS_TO_CYCLE_LIMIT - 1)
+	if MAX_PLAYERS_TO_CYCLE_LIMIT == 1 then percent = 0 end -- Avoid division by zero if limit is 1
+	sliderThumb.Position = UDim2.new(0, trackWidth * percent, sliderThumb.Position.Y.Scale, sliderThumb.Position.Y.Offset)
+end
+
+local function updateMaxSelectableTargetsFromSlider(mouseX)
+	local relativeMouseX = mouseX - sliderTrack.AbsolutePosition.X
+	local trackWidth = sliderTrack.AbsoluteSize.X - sliderThumb.AbsoluteSize.X
+	local percent = math.clamp(relativeMouseX / math.max(1, trackWidth), 0, 1)
+	
+	local newValue = math.floor(1 + percent * (MAX_PLAYERS_TO_CYCLE_LIMIT - 1) + 0.5)
+	if newValue ~= maxSelectableTargets then
+		maxSelectableTargets = newValue
+		maxTargetsLabel.Text = "Max Targets to Cycle: " .. maxSelectableTargets
+		playerListLabel.Text = "Select Players (Max " .. maxSelectableTargets .. "):"
+		updateSliderThumbPosition()
+
+		-- If current selection exceeds new max, trim it
+		while #selectedTargets > maxSelectableTargets do
+			local removedPlayer = table.remove(selectedTargets) -- Remove from end
+			-- Update button UI for removedPlayer
+			local btn = playerListFrame:FindFirstChild(removedPlayer.Name)
+			if btn then
+				btn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+				btn.TextColor3 = Color3.fromRGB(200,200,200)
+			end
+		end
+		if #selectedTargets == 0 then
+			currentCycleIndex = 1
+		else
+			currentCycleIndex = math.min(currentCycleIndex, #selectedTargets)
+		end
+	end
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		isDraggingSlider = true
+		updateMaxSelectableTargetsFromSlider(input.Position.X)
+	end
+end)
+
+sliderThumb.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		isDraggingSlider = true
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if isDraggingSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+		updateMaxSelectableTargetsFromSlider(input.Position.X)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		isDraggingSlider = false
+	end
+end)
+
 
 -- Functions
-local function createIndicator(targetHead)
-	if indicatorBillboardGui then
-		indicatorBillboardGui:Destroy()
-	end
-
-	indicatorBillboardGui = Instance.new("BillboardGui")
-	indicatorBillboardGui.Name = "TargetIndicator"
-	indicatorBillboardGui.Adornee = targetHead
-	indicatorBillboardGui.Size = INDICATOR_SIZE
-	indicatorBillboardGui.AlwaysOnTop = true
-	indicatorBillboardGui.LightInfluence = 0 -- No lighting effect on the GUI
-	indicatorBillboardGui.StudsOffsetWorldSpace = Vector3.new(0, 0.75, 0) -- Slightly above the head's center
-
-	local circleImage = Instance.new("ImageLabel")
-	circleImage.Image = INDICATOR_CIRCLE_ID
-	circleImage.Size = UDim2.new(1, 0, 1, 0)
-	circleImage.BackgroundTransparency = 1
-	circleImage.ImageColor3 = INDICATOR_COLOR
-	circleImage.Parent = indicatorBillboardGui
-
-	indicatorBillboardGui.Parent = targetHead -- Parent to head so it moves with it
-	indicatorBillboardGui.Enabled = isTrackingActive -- Only show if tracking is on
-end
-
-local function removeIndicator()
-	if indicatorBillboardGui then
-		indicatorBillboardGui:Destroy()
-		indicatorBillboardGui = nil
-	end
-end
-
 local function updatePlayerList()
+	-- Store current button states to reapply highlights
+	local selectedPlayerNames = {}
+	for _, p in ipairs(selectedTargets) do
+		selectedPlayerNames[p.Name] = true
+	end
+
 	for _, child in ipairs(playerListFrame:GetChildren()) do
 		if child:IsA("TextButton") then
 			child:Destroy()
@@ -143,44 +238,50 @@ local function updatePlayerList()
 
 	local layoutOrder = 0
 	for _, playerObj in ipairs(Players:GetPlayers()) do
-		if playerObj ~= localPlayer then -- Don't list local player for self-tracking this way
+		if playerObj ~= localPlayer then
 			local playerButton = Instance.new("TextButton")
 			playerButton.Name = playerObj.Name
 			playerButton.Size = UDim2.new(1, 0, 0, 25)
-			playerButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-			playerButton.TextColor3 = Color3.fromRGB(200, 200, 200)
 			playerButton.Text = playerObj.DisplayName .. " (@" .. playerObj.Name .. ")"
 			playerButton.Font = Enum.Font.SourceSans
 			playerButton.TextSize = 14
 			playerButton.LayoutOrder = layoutOrder
 			playerButton.Parent = playerListFrame
 
+			if selectedPlayerNames[playerObj.Name] then
+				playerButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+				playerButton.TextColor3 = Color3.fromRGB(230,230,230)
+			else
+				playerButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+				playerButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+			end
+			
 			playerButton.MouseButton1Click:Connect(function()
-				if currentTargetPlayer == playerObj then -- Deselect if clicking current target
-					currentTargetPlayer = nil
-					removeIndicator()
-					playerButton.BackgroundColor3 = Color3.fromRGB(60,60,60) -- Reset color
-					if isTrackingActive then -- If tracking was on for this player, turn it off
-						isTrackingActive = false
-						camera.CameraType = originalCameraType
-						camera.CameraSubject = originalCameraSubject
-						toggleTrackingButton.Text = "Tracking: OFF"
-						toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-					end
-				else
-					-- Deselect previous button if any
-					for _, btn in ipairs(playerListFrame:GetChildren()) do
-						if btn:IsA("TextButton") and btn.BackgroundColor3 == Color3.fromRGB(0, 120, 0) then
-							btn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+				local foundIndex = table.find(selectedTargets, playerObj)
+				if foundIndex then -- Player is selected, deselect
+					table.remove(selectedTargets, foundIndex)
+					playerButton.BackgroundColor3 = Color3.fromRGB(60,60,60)
+					playerButton.TextColor3 = Color3.fromRGB(200,200,200)
+					if #selectedTargets == 0 then
+						currentCycleIndex = 1
+						if isCyclingActive then -- Stop cycling if no targets left
+							isCyclingActive = false
+							camera.CameraType = originalCameraType
+							camera.CameraSubject = originalCameraSubject
+							toggleCycleButton.Text = "Cycle Targets: OFF"
+							toggleCycleButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
 						end
+					elseif currentCycleIndex > #selectedTargets then
+						currentCycleIndex = #selectedTargets -- Adjust index if it's out of bounds
 					end
-					
-					currentTargetPlayer = playerObj
-					playerButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0) -- Highlight selected
-					if playerObj.Character and playerObj.Character:FindFirstChild("Head") then
-						createIndicator(playerObj.Character.Head)
+				else -- Player is not selected, try to select
+					if #selectedTargets < maxSelectableTargets then
+						table.insert(selectedTargets, playerObj)
+						playerButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+						playerButton.TextColor3 = Color3.fromRGB(230,230,230)
 					else
-						removeIndicator() -- Target has no head, remove old indicator
+						-- Optionally, provide feedback that max targets are selected
+						-- For now, just don't select.
 					end
 				end
 			end)
@@ -189,111 +290,118 @@ local function updatePlayerList()
 	end
 end
 
-local function onTrackingToggled()
-	isTrackingActive = not isTrackingActive
-	if isTrackingActive then
-		if currentTargetPlayer and currentTargetPlayer.Character and currentTargetPlayer.Character:FindFirstChild("Head") then
-			originalCameraType = camera.CameraType -- Store current before changing
+local function onCycleToggled()
+	isCyclingActive = not isCyclingActive
+	if isCyclingActive then
+		if #selectedTargets > 0 then
+			originalCameraType = camera.CameraType
 			originalCameraSubject = camera.CameraSubject
 			camera.CameraType = Enum.CameraType.Scriptable
-			toggleTrackingButton.Text = "Tracking: ON"
-			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-			if indicatorBillboardGui then
-				indicatorBillboardGui.Enabled = true
-			end
+			toggleCycleButton.Text = "Cycle Targets: ON"
+			toggleCycleButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+			currentCycleIndex = math.max(1, math.min(currentCycleIndex, #selectedTargets)) -- Ensure valid index
 		else
-			isTrackingActive = false -- Can't track if no valid target
-			toggleTrackingButton.Text = "Tracking: OFF (No Target)"
-			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-			print("Kupal Tracker: No valid target selected to track.")
+			isCyclingActive = false -- Can't cycle if no targets
+			toggleCycleButton.Text = "Cycle: OFF (No Targets)"
+			toggleCycleButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+			-- print("Kupal Tracker: No targets selected to cycle.")
 		end
 	else
 		camera.CameraType = originalCameraType
 		camera.CameraSubject = originalCameraSubject
-		toggleTrackingButton.Text = "Tracking: OFF"
-		toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-		if indicatorBillboardGui then
-			indicatorBillboardGui.Enabled = false
-		end
+		toggleCycleButton.Text = "Cycle Targets: OFF"
+		toggleCycleButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+	end
+end
+
+local function onNextTargetClicked()
+	if isCyclingActive and #selectedTargets > 0 then
+		currentCycleIndex = (currentCycleIndex % #selectedTargets) + 1
+	elseif #selectedTargets > 0 then -- Not cycling, but can set the starting point
+		currentCycleIndex = (currentCycleIndex % #selectedTargets) + 1
+        -- If user wants to immediately start cycling on "Next Target" when off:
+        -- onCycleToggled()
 	end
 end
 
 local function onRenderStepped()
-	if not isTrackingActive or not currentTargetPlayer then
+	if not isCyclingActive or #selectedTargets == 0 then
 		return
 	end
 
+	local currentTargetPlayer = selectedTargets[currentCycleIndex]
+	if not currentTargetPlayer or not Players:FindFirstChild(currentTargetPlayer.Name) then
+		-- Target player left or is invalid, remove from list and adjust
+		table.remove(selectedTargets, currentCycleIndex)
+		if #selectedTargets == 0 then
+			isCyclingActive = false
+			camera.CameraType = originalCameraType
+			camera.CameraSubject = originalCameraSubject
+			toggleCycleButton.Text = "Cycle Targets: OFF"
+			toggleCycleButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+			updatePlayerList()
+			return
+		end
+		currentCycleIndex = math.max(1, math.min(currentCycleIndex, #selectedTargets))
+		updatePlayerList() -- Refresh list as player might be gone
+		currentTargetPlayer = selectedTargets[currentCycleIndex] -- Get new current target
+		if not currentTargetPlayer then return end -- Should not happen if list is not empty
+	end
+	
 	local targetCharacter = currentTargetPlayer.Character
 	if targetCharacter then
 		local targetHead = targetCharacter:FindFirstChild("Head")
 		if targetHead then
 			local headCFrame = targetHead.CFrame
-			camera.CFrame = headCFrame * CAMERA_OFFSET
-			camera.Focus = headCFrame -- Ensure focus is on the head
-
-			-- Ensure indicator is present and correctly parented if character respawned
-			if not indicatorBillboardGui or not indicatorBillboardGui.Adornee or indicatorBillboardGui.Adornee ~= targetHead then
-				createIndicator(targetHead)
-			elseif indicatorBillboardGui then
-				indicatorBillboardGui.Enabled = true -- Make sure it's visible
-			end
+			local targetCamCFrame = headCFrame * CAMERA_OFFSET
+			
+			-- Smooth camera transition (optional, can be demanding)
+			-- camera.CFrame = camera.CFrame:Lerp(targetCamCFrame, 0.1) -- Adjust 0.1 for speed
+			camera.CFrame = targetCamCFrame -- Direct set for now
+			camera.Focus = headCFrame
 		else
 			-- Head not found, character might be dead or incomplete
-			if camera.CameraType == Enum.CameraType.Scriptable then
-				camera.CameraType = originalCameraType -- Revert camera if target head lost
-				camera.CameraSubject = originalCameraSubject
-			end
-			removeIndicator()
-			-- Optionally, you could auto-disable tracking here:
-			-- isTrackingActive = false
-			-- toggleTrackingButton.Text = "Tracking: OFF (Target Lost)"
-			-- toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150,0,0)
+			-- Wait for respawn or manual "Next Target"
 		end
 	else
-		-- Character not found, player might have left or not spawned yet
-		if camera.CameraType == Enum.CameraType.Scriptable then
-			camera.CameraType = originalCameraType
-			camera.CameraSubject = originalCameraSubject
-		end
-		removeIndicator()
-		-- Optionally, auto-disable tracking:
-		-- isTrackingActive = false
-		-- currentTargetPlayer = nil -- Clear target as they have no character
-		-- toggleTrackingButton.Text = "Tracking: OFF (Target Lost)"
-		-- toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150,0,0)
-		-- updatePlayerList() -- Refresh list as player might be gone
+		-- Character not found
+		-- Wait for respawn or manual "Next Target"
 	end
 end
 
 local function onPlayerAdded(player)
 	updatePlayerList()
-	player.CharacterAdded:Connect(function(character)
-		-- If this player is the current target and their character re-added (respawn)
-		if player == currentTargetPlayer and character:FindFirstChild("Head") then
-			if isTrackingActive then -- Re-create indicator if tracking was on
-				createIndicator(character.Head)
-			end
-		end
-	end)
+	-- No specific character added logic needed here beyond list update
 end
 
 local function onPlayerRemoving(player)
-	if player == currentTargetPlayer then
-		currentTargetPlayer = nil
-		removeIndicator()
-		if isTrackingActive then -- If tracking this player, turn it off
-			isTrackingActive = false
-			camera.CameraType = originalCameraType
-			camera.CameraSubject = originalCameraSubject
-			toggleTrackingButton.Text = "Tracking: OFF"
-			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+	local removed = false
+	for i = #selectedTargets, 1, -1 do
+		if selectedTargets[i] == player then
+			table.remove(selectedTargets, i)
+			removed = true
+		end
+	end
+
+	if removed then
+		if #selectedTargets == 0 then
+			currentCycleIndex = 1
+			if isCyclingActive then
+				isCyclingActive = false
+				camera.CameraType = originalCameraType
+				camera.CameraSubject = originalCameraSubject
+				toggleCycleButton.Text = "Cycle Targets: OFF"
+				toggleCycleButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+			end
+		else
+			currentCycleIndex = math.max(1, math.min(currentCycleIndex, #selectedTargets))
 		end
 	end
 	updatePlayerList()
 end
 
 local function onInputBegan(input, gameProcessedEvent)
-	if gameProcessedEvent then return end -- Don't process if GUI is typing etc.
+	if gameProcessedEvent and not (input.UserInputType == Enum.UserInputType.MouseButton1 and isDraggingSlider) then return end
 
 	if input.KeyCode == MENU_TOGGLE_KEY then
 		menuVisible = not menuVisible
@@ -301,35 +409,22 @@ local function onInputBegan(input, gameProcessedEvent)
 	end
 end
 
+closeButton.MouseButton1Click:Connect(function()
+	menuVisible = false
+	mainFrame.Visible = false
+end)
 
 -- Initial Setup
-screenGui.Parent = localPlayer:WaitForChild("PlayerGui") -- Add GUI to player
-updatePlayerList() -- Populate player list initially
+screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+updatePlayerList()
+updateSliderThumbPosition() -- Set initial thumb position
 
 -- Connections
-toggleTrackingButton.MouseButton1Click:Connect(onTrackingToggled)
+toggleCycleButton.MouseButton1Click:Connect(onCycleToggled)
+nextTargetButton.MouseButton1Click:Connect(onNextTargetClicked)
 RunService.RenderStepped:Connect(onRenderStepped)
 Players.PlayerAdded:Connect(onPlayerAdded)
 Players.PlayerRemoving:Connect(onPlayerRemoving)
 UserInputService.InputBegan:Connect(onInputBegan)
 
--- Handle existing players and their character loads
-for _, player in ipairs(Players:GetPlayers()) do
-	if player ~= localPlayer then -- Check for existing players
-		if player.Character then -- If character already exists
-			player.CharacterAdded:Connect(function(character) -- Also connect for respawns
-				if player == currentTargetPlayer and character:FindFirstChild("Head") then
-					if isTrackingActive then createIndicator(character.Head) end
-				end
-			end)
-		else -- If character doesn't exist yet
-			player.CharacterAdded:Connect(function(character)
-				if player == currentTargetPlayer and character:FindFirstChild("Head") then
-					if isTrackingActive then createIndicator(character.Head) end
-				end
-			end)
-		end
-	end
-end
-
-print("Kupal Tracker Loaded. Press RightControl to toggle menu.")
+print("Kupal Tracking (Multi-Target Cycle) Loaded. Press RightControl to toggle menu.")

@@ -1,0 +1,335 @@
+--!nocheck
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Local Player and Camera
+local localPlayer = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local originalCameraType = camera.CameraType
+local originalCameraSubject = camera.CameraSubject -- Store the original subject
+
+-- Configuration
+local CAMERA_OFFSET = CFrame.new(0, 2, 7) -- Offset from head: (X, Y, Z) - Y is up, Z is distance behind
+local INDICATOR_CIRCLE_ID = "rbxassetid://5035439195" -- A simple white circle decal
+local INDICATOR_SIZE = UDim2.new(0, 60, 0, 60) -- Pixel size of the circle
+local INDICATOR_COLOR = Color3.fromRGB(255, 0, 0) -- Red
+local MENU_TOGGLE_KEY = Enum.KeyCode.RightControl -- Key to toggle the menu visibility
+
+-- State
+local isTrackingActive = false
+local currentTargetPlayer = nil
+local indicatorBillboardGui = nil
+local menuVisible = true -- Menu starts visible
+
+-- GUI Elements
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "KupalTrackerGui"
+screenGui.ResetOnSpawn = false -- Keep GUI when player respawns
+screenGui.DisplayOrder = 1000 -- Ensure it's on top of most other GUIs
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 250, 0, 350)
+mainFrame.Position = UDim2.new(0.02, 0, 0.02, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 2
+mainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+mainFrame.Draggable = true -- Allow dragging
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "TitleLabel"
+titleLabel.Size = UDim2.new(1, 0, 0, 30)
+titleLabel.Position = UDim2.new(0, 0, 0, 0)
+titleLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+titleLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+titleLabel.Text = "Kupal Tracker"
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextSize = 18
+titleLabel.Parent = mainFrame
+
+local toggleTrackingButton = Instance.new("TextButton")
+toggleTrackingButton.Name = "ToggleTrackingButton"
+toggleTrackingButton.Size = UDim2.new(1, -20, 0, 30)
+toggleTrackingButton.Position = UDim2.new(0, 10, 0, 40)
+toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+toggleTrackingButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+toggleTrackingButton.Text = "Tracking: OFF"
+toggleTrackingButton.Font = Enum.Font.SourceSans
+toggleTrackingButton.TextSize = 16
+toggleTrackingButton.Parent = mainFrame
+
+local playerListLabel = Instance.new("TextLabel")
+playerListLabel.Name = "PlayerListLabel"
+playerListLabel.Size = UDim2.new(1, -20, 0, 20)
+playerListLabel.Position = UDim2.new(0, 10, 0, 80)
+playerListLabel.BackgroundTransparency = 1
+playerListLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+playerListLabel.Text = "Select Player to Track:"
+playerListLabel.Font = Enum.Font.SourceSans
+playerListLabel.TextSize = 14
+playerListLabel.TextXAlignment = Enum.TextXAlignment.Left
+playerListLabel.Parent = mainFrame
+
+local playerListFrame = Instance.new("ScrollingFrame")
+playerListFrame.Name = "PlayerListFrame"
+playerListFrame.Size = UDim2.new(1, -20, 1, -140) -- Adjust height based on other elements
+playerListFrame.Position = UDim2.new(0, 10, 0, 105)
+playerListFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+playerListFrame.BorderSizePixel = 1
+playerListFrame.BorderColor3 = Color3.fromRGB(60, 60, 60)
+playerListFrame.CanvasSize = UDim2.new(0,0,0,0) -- Will be updated by UIListLayout
+playerListFrame.ScrollBarThickness = 6
+playerListFrame.Parent = mainFrame
+
+local uiListLayout = Instance.new("UIListLayout")
+uiListLayout.Parent = playerListFrame
+uiListLayout.Padding = UDim.new(0, 5)
+uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local menuInfoLabel = Instance.new("TextLabel")
+menuInfoLabel.Name = "MenuInfoLabel"
+menuInfoLabel.Size = UDim2.new(1, 0, 0, 20)
+menuInfoLabel.Position = UDim2.new(0,0,1,-20) -- At the bottom of mainFrame
+menuInfoLabel.BackgroundTransparency = 1
+menuInfoLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+menuInfoLabel.Text = "Press RightControl to toggle menu"
+menuInfoLabel.Font = Enum.Font.SourceSansItalic
+menuInfoLabel.TextSize = 12
+menuInfoLabel.Parent = mainFrame
+
+
+-- Functions
+local function createIndicator(targetHead)
+	if indicatorBillboardGui then
+		indicatorBillboardGui:Destroy()
+	end
+
+	indicatorBillboardGui = Instance.new("BillboardGui")
+	indicatorBillboardGui.Name = "TargetIndicator"
+	indicatorBillboardGui.Adornee = targetHead
+	indicatorBillboardGui.Size = INDICATOR_SIZE
+	indicatorBillboardGui.AlwaysOnTop = true
+	indicatorBillboardGui.LightInfluence = 0 -- No lighting effect on the GUI
+	indicatorBillboardGui.StudsOffsetWorldSpace = Vector3.new(0, 0.75, 0) -- Slightly above the head's center
+
+	local circleImage = Instance.new("ImageLabel")
+	circleImage.Image = INDICATOR_CIRCLE_ID
+	circleImage.Size = UDim2.new(1, 0, 1, 0)
+	circleImage.BackgroundTransparency = 1
+	circleImage.ImageColor3 = INDICATOR_COLOR
+	circleImage.Parent = indicatorBillboardGui
+
+	indicatorBillboardGui.Parent = targetHead -- Parent to head so it moves with it
+	indicatorBillboardGui.Enabled = isTrackingActive -- Only show if tracking is on
+end
+
+local function removeIndicator()
+	if indicatorBillboardGui then
+		indicatorBillboardGui:Destroy()
+		indicatorBillboardGui = nil
+	end
+end
+
+local function updatePlayerList()
+	for _, child in ipairs(playerListFrame:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	local layoutOrder = 0
+	for _, playerObj in ipairs(Players:GetPlayers()) do
+		if playerObj ~= localPlayer then -- Don't list local player for self-tracking this way
+			local playerButton = Instance.new("TextButton")
+			playerButton.Name = playerObj.Name
+			playerButton.Size = UDim2.new(1, 0, 0, 25)
+			playerButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+			playerButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+			playerButton.Text = playerObj.DisplayName .. " (@" .. playerObj.Name .. ")"
+			playerButton.Font = Enum.Font.SourceSans
+			playerButton.TextSize = 14
+			playerButton.LayoutOrder = layoutOrder
+			playerButton.Parent = playerListFrame
+
+			playerButton.MouseButton1Click:Connect(function()
+				if currentTargetPlayer == playerObj then -- Deselect if clicking current target
+					currentTargetPlayer = nil
+					removeIndicator()
+					playerButton.BackgroundColor3 = Color3.fromRGB(60,60,60) -- Reset color
+					if isTrackingActive then -- If tracking was on for this player, turn it off
+						isTrackingActive = false
+						camera.CameraType = originalCameraType
+						camera.CameraSubject = originalCameraSubject
+						toggleTrackingButton.Text = "Tracking: OFF"
+						toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+					end
+				else
+					-- Deselect previous button if any
+					for _, btn in ipairs(playerListFrame:GetChildren()) do
+						if btn:IsA("TextButton") and btn.BackgroundColor3 == Color3.fromRGB(0, 120, 0) then
+							btn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+						end
+					end
+					
+					currentTargetPlayer = playerObj
+					playerButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0) -- Highlight selected
+					if playerObj.Character and playerObj.Character:FindFirstChild("Head") then
+						createIndicator(playerObj.Character.Head)
+					else
+						removeIndicator() -- Target has no head, remove old indicator
+					end
+				end
+			end)
+			layoutOrder = layoutOrder + 1
+		end
+	end
+end
+
+local function onTrackingToggled()
+	isTrackingActive = not isTrackingActive
+	if isTrackingActive then
+		if currentTargetPlayer and currentTargetPlayer.Character and currentTargetPlayer.Character:FindFirstChild("Head") then
+			originalCameraType = camera.CameraType -- Store current before changing
+			originalCameraSubject = camera.CameraSubject
+			camera.CameraType = Enum.CameraType.Scriptable
+			toggleTrackingButton.Text = "Tracking: ON"
+			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+			if indicatorBillboardGui then
+				indicatorBillboardGui.Enabled = true
+			end
+		else
+			isTrackingActive = false -- Can't track if no valid target
+			toggleTrackingButton.Text = "Tracking: OFF (No Target)"
+			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+			print("Kupal Tracker: No valid target selected to track.")
+		end
+	else
+		camera.CameraType = originalCameraType
+		camera.CameraSubject = originalCameraSubject
+		toggleTrackingButton.Text = "Tracking: OFF"
+		toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+		if indicatorBillboardGui then
+			indicatorBillboardGui.Enabled = false
+		end
+	end
+end
+
+local function onRenderStepped()
+	if not isTrackingActive or not currentTargetPlayer then
+		return
+	end
+
+	local targetCharacter = currentTargetPlayer.Character
+	if targetCharacter then
+		local targetHead = targetCharacter:FindFirstChild("Head")
+		if targetHead then
+			local headCFrame = targetHead.CFrame
+			camera.CFrame = headCFrame * CAMERA_OFFSET
+			camera.Focus = headCFrame -- Ensure focus is on the head
+
+			-- Ensure indicator is present and correctly parented if character respawned
+			if not indicatorBillboardGui or not indicatorBillboardGui.Adornee or indicatorBillboardGui.Adornee ~= targetHead then
+				createIndicator(targetHead)
+			elseif indicatorBillboardGui then
+				indicatorBillboardGui.Enabled = true -- Make sure it's visible
+			end
+		else
+			-- Head not found, character might be dead or incomplete
+			if camera.CameraType == Enum.CameraType.Scriptable then
+				camera.CameraType = originalCameraType -- Revert camera if target head lost
+				camera.CameraSubject = originalCameraSubject
+			end
+			removeIndicator()
+			-- Optionally, you could auto-disable tracking here:
+			-- isTrackingActive = false
+			-- toggleTrackingButton.Text = "Tracking: OFF (Target Lost)"
+			-- toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150,0,0)
+		end
+	else
+		-- Character not found, player might have left or not spawned yet
+		if camera.CameraType == Enum.CameraType.Scriptable then
+			camera.CameraType = originalCameraType
+			camera.CameraSubject = originalCameraSubject
+		end
+		removeIndicator()
+		-- Optionally, auto-disable tracking:
+		-- isTrackingActive = false
+		-- currentTargetPlayer = nil -- Clear target as they have no character
+		-- toggleTrackingButton.Text = "Tracking: OFF (Target Lost)"
+		-- toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(150,0,0)
+		-- updatePlayerList() -- Refresh list as player might be gone
+	end
+end
+
+local function onPlayerAdded(player)
+	updatePlayerList()
+	player.CharacterAdded:Connect(function(character)
+		-- If this player is the current target and their character re-added (respawn)
+		if player == currentTargetPlayer and character:FindFirstChild("Head") then
+			if isTrackingActive then -- Re-create indicator if tracking was on
+				createIndicator(character.Head)
+			end
+		end
+	end)
+end
+
+local function onPlayerRemoving(player)
+	if player == currentTargetPlayer then
+		currentTargetPlayer = nil
+		removeIndicator()
+		if isTrackingActive then -- If tracking this player, turn it off
+			isTrackingActive = false
+			camera.CameraType = originalCameraType
+			camera.CameraSubject = originalCameraSubject
+			toggleTrackingButton.Text = "Tracking: OFF"
+			toggleTrackingButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+		end
+	end
+	updatePlayerList()
+end
+
+local function onInputBegan(input, gameProcessedEvent)
+	if gameProcessedEvent then return end -- Don't process if GUI is typing etc.
+
+	if input.KeyCode == MENU_TOGGLE_KEY then
+		menuVisible = not menuVisible
+		mainFrame.Visible = menuVisible
+	end
+end
+
+
+-- Initial Setup
+screenGui.Parent = localPlayer:WaitForChild("PlayerGui") -- Add GUI to player
+updatePlayerList() -- Populate player list initially
+
+-- Connections
+toggleTrackingButton.MouseButton1Click:Connect(onTrackingToggled)
+RunService.RenderStepped:Connect(onRenderStepped)
+Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerRemoving:Connect(onPlayerRemoving)
+UserInputService.InputBegan:Connect(onInputBegan)
+
+-- Handle existing players and their character loads
+for _, player in ipairs(Players:GetPlayers()) do
+	if player ~= localPlayer then -- Check for existing players
+		if player.Character then -- If character already exists
+			player.CharacterAdded:Connect(function(character) -- Also connect for respawns
+				if player == currentTargetPlayer and character:FindFirstChild("Head") then
+					if isTrackingActive then createIndicator(character.Head) end
+				end
+			end)
+		else -- If character doesn't exist yet
+			player.CharacterAdded:Connect(function(character)
+				if player == currentTargetPlayer and character:FindFirstChild("Head") then
+					if isTrackingActive then createIndicator(character.Head) end
+				end
+			end)
+		end
+	end
+end
+
+print("Kupal Tracker Loaded. Press RightControl to toggle menu.")
